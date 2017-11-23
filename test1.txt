@@ -1,0 +1,115 @@
+import sys
+import RPi.GPIO as GPIO
+import os
+import Adafruit_DHT
+import urllib2
+import smbus
+import time
+from ctypes import c_short
+
+#Register Address
+regCall   = 0xAA
+regMean   = 0xF4
+regMSB    = 0xF6
+regLSB    = 0xF7
+regPres   = 0x34
+regTemp   = 0x2e
+
+DEBUG = 1
+sample = 2
+deviceAdd =0x77
+
+humi=""
+temp=""
+
+#bus = smbus.SMBus(0)  #for Pi1 uses 0
+I2cbus = smbus.SMBus(1) # for Pi2 uses 1
+
+DHTpin = 17
+
+key="A6ROCCZQMT0XT2BU"       # Enter your Write API key from ThingSpeak
+
+GPIO.setmode(GPIO.BCM)
+
+GPIO.setwarnings(False)
+GPIO.setmode(GPIO.BCM)     
+
+
+def convert1(data, i):   # signed 16-bit value
+  return c_short((data[i]<< 8) + data[i + 1]).value
+ 
+def convert2(data, i):   # unsigned 16-bit value
+  return (data[i]<< 8) + data[i+1] 
+   
+def readBmp180(addr=deviceAdd):    
+  value = bus.read_i2c_block_data(addr, regCall, 22)  # Read calibration data
+
+    # Read temperature
+  bus.write_byte_data(addr, regMean, regTemp)
+  time.sleep(0.005)
+  (msb, lsb) = bus.read_i2c_block_data(addr, regMSB, 2)
+  P2 = (msb << 8) + lsb
+ 
+  # Read pressure
+  bus.write_byte_data(addr, regMean, regPres + (sample << 6))
+  time.sleep(0.05)
+  (msb, lsb, xsb) = bus.read_i2c_block_data(addr, regMSB, 3)
+  P1 = ((msb << 16) + (lsb << 8) + xsb) >> (8 - sample)
+
+   # Refine temperature
+  X1 = ((P2 - AC6) * AC5) >> 15
+  X2 = (MC << 11) / (X1 + MD)
+  B5 = X1 + X2
+  temperature = (B5 + 8) >> 4
+ 
+  # Refine pressure
+  B6  = B5 - 4000
+  B62 = B6 * B6 >> 12
+  X1  = (B2 * B62) >> 11
+  X2  = AC2 * B6 >> 11
+  X3  = X1 + X2
+  B3  = (((AC1 * 4 + X3) << sample) + 2) >> 2
+ 
+  X1 = AC3 * B6 >> 13
+  X2 = (B1 * B62) >> 16
+  X3 = ((X1 + X2) + 2) >> 2
+  B4 = (AC4 * (X3 + 32768)) >> 15
+  B7 = (P1 - B3) * (50000 >> sample)
+ 
+  P = (B7 * 2) / B4
+ 
+  X1 = (P >> 8) * (P >> 8)
+  X1 = (X1 * 3038) >> 16
+  X2 = (-7357 * P) >> 16
+  pressure = P + ((X1 + X2 + 3791) >> 4)
+  
+  return (str(pressure/100.0))
+
+def readDHT():
+    humi, temp = Adafruit_DHT.read_retry(Adafruit_DHT.DHT11, DHTpin)
+    return (str(int(humi)), str(int(temp)))
+    
+# main() function
+def main():
+    
+    print 'System Ready...'
+    URL = 'https://api.thingspeak.com/update?api_key=A6ROCCZQMT0XT2BU%s' % key
+    print "Wait...."
+    while True:
+            (humi, temp)= readDHT()
+            (pressure) =readBmp180()
+           
+            lcdcmd(0x01)
+            lcdstring("Humi#Temp#P(hPa)")
+            lcdstring(humi+'%'+"  %sC  %s" %(temp, pressure))
+            finalURL = URL +"&field1=%s&field2=%s"%(humi, temp)+"&field3=%s" %(pressure) 
+            print finalURL
+            s=urllib2.urlopen(finalURL);
+            print  humi+ " " + temp + " " + pressure
+            s.close()
+            time.sleep(10)
+            
+
+     
+if __name__=="__main__":
+   main()
